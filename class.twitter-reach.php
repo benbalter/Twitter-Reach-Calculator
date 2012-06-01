@@ -18,12 +18,12 @@
  */
 class Twitter_Reach {
 
-	public $tweets = array(); //stores tweet data (as $this->tweets->results)
-	public $users = array(); //stores user data
-	public $follower_counts = array(); //array in form of screen_name => follower count
+	public $tweets = array(); //array of tweet objects
+	public $users = array(); //an array of screen names that tweeted the search
+	public $reach = array(); //array of user IDs that represent the total reach
 	public $embed_code = '<blockquote class="twitter-tweet"><p>%1$s</p>&mdash; %2$s (@%3$s) <a href="https://twitter.com/twitterapi/status/%4$d" data-datetime="%5$s">%6$s</a></blockquote>';
-	public $search_base = 'http://search.twitter.com/search.json?rpp=100&q=%s';
-	public $user_lookup_base = 'http://api.twitter.com/1/users/lookup.json?include_entities=true&screen_name=%s';
+	public $search_base = 'http://search.twitter.com/search.json';
+	public $user_lookup_base = 'http://api.twitter.com/1/followers/ids.json?screen_name=%s';
 	public $reach; // (int) total reach
 	
 	/**
@@ -35,7 +35,7 @@ class Twitter_Reach {
 			die( 'Please pass query via construct' );
 			
 		$this->get_tweets( $query );
-		$this->build_follower_array();
+		$this->build_user_array();
 		$this->get_users();
 		$this->propegate_follower_counts();
 		
@@ -49,12 +49,12 @@ class Twitter_Reach {
 		$data = file_get_contents( $url );
 		
 		if ( !$data )
-			die( "Can't retrieve data from url: $url" );
+			return false;
 			
 		$data = json_decode( $data );
 		
 		if ( !$data )
-			die( "Can't parse data from url: $url" );
+			return false;
 			
 		return $data;
 
@@ -65,8 +65,20 @@ class Twitter_Reach {
 	 */
 	function get_tweets( $q ) {
 	
-		$url = sprintf( $this->search_base, urlencode( $q ) );
-		$this->tweets = $this->get_and_decode( $url );
+		//starting URL
+		$url = sprintf( $this->search_base . '?rpp=100&q=%s', urlencode( $q ) );
+		
+		while( $url ) {
+			
+			var_dump( $url );
+			$response = $this->get_and_decode( $url );
+			
+			if ( $response )
+				$this->tweets = array_merge( $this->tweets, $response->results );
+				
+			$url = ( $response !== false && isset( $response->next_page ) ) ? $this->search_base . $response->next_page : false;			
+		}
+		
 		return $this->tweets;
 		
 	}
@@ -74,13 +86,15 @@ class Twitter_Reach {
 	/**
 	 * Propegates empty follower count array from given set of tweets
 	 */
-	function build_follower_array( $data = null ) {
+	function build_user_array( $data = null ) {
 		
 		if ( $data == null )
 			$data = $this->tweets;
 		
-		foreach ( $data->results as $tweet )
-			$this->follower_counts[ $tweet->from_user ] = 0;
+		//loop through tweets and move users into an array
+		foreach ( $data as $tweet )
+			if ( !in_array( $tweet->from_user, $this->users ) )
+				$this->users[] = $tweet->from_user;
 
 		return $this->follower_counts;
 		
@@ -94,10 +108,15 @@ class Twitter_Reach {
 		if ( empty( $users ) )
 			$users = array_keys( $this->follower_counts );
 			
-		$user_string = implode( ',', $users );
-		$url = sprintf( $this->user_lookup_base, $user_string );
+		foreach ( array_chunk( $users, 100 ) as $chunk ) {
+			
+			$user_string = implode( ',', $chunk );
+			$url = sprintf( $this->user_lookup_base, $user_string );
+			$this->users = array_merge( $this->users, $this->get_and_decode( $url ) );
+		}
+			
+		
 
-		$this->users = $this->get_and_decode( $url );
 	
 		return $this->users;
 		
@@ -122,7 +141,7 @@ class Twitter_Reach {
 			
 		$this->reach = array_sum( $this->follower_counts );
 		
-		$this->sort( $tweets->results );
+		$this->sort( $tweets );
 							
 		return $this->follower_counts;
 		
